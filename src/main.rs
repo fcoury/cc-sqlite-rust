@@ -20,14 +20,20 @@ fn main() -> Result<()> {
             file.read_exact(&mut header)?;
 
             // The page size is stored at the 16th byte offset, using 2 bytes in big-endian order
-            #[allow(unused_variables)]
             let page_size = u16::from_be_bytes([header[16], header[17]]);
 
             // You can use print statements as follows for debugging, they'll be visible when running tests.
             println!("Logs from your program will appear here!");
 
-            // Uncomment this block to pass the first stage
             println!("database page size: {}", page_size);
+
+            let mut page = vec![0; page_size as usize];
+            file.read_exact(&mut page)?;
+
+            let number_of_tables = u16::from_be_bytes([page[3], page[4]]);
+            println!("number of tables: {}", number_of_tables);
+
+            // The first 4 bytes of the first page are the database magic number
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
