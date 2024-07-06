@@ -1,5 +1,6 @@
 mod byte_reader;
 mod page;
+mod utils;
 mod varint;
 
 use anyhow::{bail, Result};
@@ -42,7 +43,7 @@ fn main() -> Result<()> {
             };
 
             // let page = TableLeafPageOld::new(&page_data, Some(100))?;
-            println!("page: {:?}", page);
+            println!("page: {:#?}", page);
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }

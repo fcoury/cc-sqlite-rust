@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::bail;
 
 use crate::byte_reader::ByteReader;
@@ -32,22 +33,88 @@ impl TableLeafPage {
         let mut reader = ByteReader::new(data);
 
         reader.skip(1); // page type
-        reader.skip(2); // first freeblock
+        let freeblock_offset = reader.read_u16(); // first freeblock
+        println!("freeblock_offset: {:04x}", freeblock_offset);
 
         let cell_count = reader.read_u16();
+        println!("cell count: {}", cell_count);
         let cell_content_area = reader.read_u16();
-        println!("cell_content_area: {:4x}", cell_content_area);
+        println!("cell_content_area: {:04x}", cell_content_area);
 
-        reader.skip(1); // fragmented free bytes
+        let num_fragmented_bytes = reader.read_u8(); // fragmented free bytes
+        println!("num_fragmented_bytes: {}", num_fragmented_bytes);
 
-        let mut cells = Vec::new();
+        let mut cells = Vec::with_capacity(cell_count as usize);
         for _ in 0..cell_count {
             let cell_pointer = reader.read_u16();
+            println!("cell_pointer: {:04x}", cell_pointer);
             let ptr = (cell_pointer - offset.unwrap_or(0) as u16) as usize;
-            cells.push(parse_cell(&data[ptr..])?);
+            let cell = TableLeafCell::new(&data[ptr..])?;
+            cells.push(cell);
         }
 
         Ok(TableLeafPage { cells })
+    }
+}
+
+#[derive(Debug)]
+struct TableLeafCell {
+    rowid: u64,
+    payload_size: u64,
+    column_types: Vec<ColType>,
+    column_values: Vec<Option<ColValue>>,
+}
+
+impl TableLeafCell {
+    pub fn new(data: &[u8]) -> anyhow::Result<Self> {
+        let mut reader = ByteReader::new(data);
+
+        let payload_size = reader.read_varint();
+        let rowid = reader.read_varint();
+        let header_size = reader.read_varint();
+
+        let mut column_types = Vec::new();
+        while reader.pos < header_size as usize - 1 {
+            let col_type = ColType::from(reader.read_varint());
+            column_types.push(col_type);
+        }
+
+        let mut reader = ByteReader::new(&data[header_size as usize + 2..]);
+        let mut column_values = Vec::with_capacity(column_types.len());
+        for col_type in &column_types {
+            let col_value = match col_type {
+                ColType::Null => None,
+                ColType::Int8 => Some(ColValue::Int8(reader.read_u8())),
+                ColType::Int16 => Some(ColValue::Int16(reader.read_u16())),
+                ColType::Int24 => Some(ColValue::Int24(reader.read_u24())),
+                ColType::Int32 => Some(ColValue::Int32(reader.read_u32())),
+                ColType::Int48 => Some(ColValue::Int48(reader.read_u48())),
+                ColType::Int64 => Some(ColValue::Int64(reader.read_u64())),
+                ColType::Float64 => Some(ColValue::Float64(reader.read_f64())),
+                ColType::Zero => Some(ColValue::Zero),
+                ColType::One => Some(ColValue::One),
+                ColType::Reserved => unimplemented!("reserved column type"),
+                ColType::Blob(length) if *length == 0 => None,
+                ColType::Blob(length) => {
+                    let value = reader.read_bytes(*length as usize);
+                    Some(ColValue::Blob(value.to_vec()))
+                }
+                ColType::Text(length) if *length == 0 => None,
+                ColType::Text(length) => {
+                    let value = reader.read_bytes(*length as usize);
+                    Some(ColValue::Text(String::from_utf8_lossy(&value).to_string()))
+                }
+            };
+
+            column_values.push(col_value);
+        }
+
+        Ok(Self {
+            rowid,
+            payload_size,
+            column_types,
+            column_values,
+        })
     }
 }
 
@@ -63,242 +130,44 @@ enum ColType {
     Float64,
     Zero,
     One,
+    Reserved,
     Blob(u8),
     Text(u8),
 }
 
-fn parse_cell(data: &[u8]) -> anyhow::Result<TableLeafCell> {
-    let mut reader = ByteReader::new(data);
-
-    // --- cell info section ---
-
-    let payload_size = reader.read_varint(); // payload bytes
-    println!("payload_size: {}", payload_size);
-    let row_id = reader.read_varint(); // rowid
-
-    // --- header section ---
-
-    let (header_size, size) = reader.read_varint_with_size();
-    let remaining_header_size = header_size - size as u64;
-
-    // --- header columns ---
-
-    let mut columns = Vec::new();
-    while reader.pos < remaining_header_size as usize {
-        // A record contains a header and a body, in that order. The header begins with a single
-        // varint which determines the total number of bytes in the header. The varint value is the
-        // size of the header in bytes including the size varint itself. Following the size varint
-        // are one or more additional varints, one per column. These additional varints are called
-        // "serial type" numbers and determine the datatype of each column, according to the
-        // following chart:
-
-        // The values for each column in the record immediately follow the header. For serial types
-        // 0, 8, 9, 12, and 13, the value is zero bytes in length. If all columns are of these
-        // types then the body section of the record is empty.
-
-        let col_size = reader.read_varint();
-        println!("- col_size: {}", col_size);
-
-        let col_type = reader.read_varint();
-        println!("  col_type: {:x}", col_type);
-
-        match col_type {
-            0 => {
-                println!("  NULL");
-                columns.push(ColType::Null);
-            }
-            1 => {
-                println!("  8-bit");
-                columns.push(ColType::Int8);
-            }
-            2 => {
-                println!("  16-bit");
-                columns.push(ColType::Int16);
-            }
-            3 => {
-                println!("  24-bit");
-                columns.push(ColType::Int24);
-            }
-            4 => {
-                println!("  32-bit");
-                columns.push(ColType::Int32);
-            }
-            5 => {
-                println!("  48-bit");
-                columns.push(ColType::Int48);
-            }
-            6 => {
-                println!("  64-bit");
-                columns.push(ColType::Int64);
-            }
-            7 => {
-                println!("  64-bit float");
-                columns.push(ColType::Float64);
-            }
-            8 => {
-                println!("  Zero");
-                columns.push(ColType::Zero);
-            }
-            9 => {
-                println!("  One");
-                columns.push(ColType::One);
-            }
-            10..=11 => {
-                println!("  Internal use");
-            }
-            12.. if col_type % 2 == 0 => {
-                let length = (col_type - 12) / 2;
-                println!("  BLOB length: {}", length);
-                columns.push(ColType::Blob(length as u8));
-            }
-            13.. if col_type % 2 == 1 => {
-                let length = (col_type - 13) / 2;
-                println!("  TEXT length: {}", length);
-                columns.push(ColType::Text(length as u8));
-            }
-            _ => bail!("Unsupported column type: {}", col_type),
-        }
-        println!();
-    }
-
-    println!("Columns: {:?}", columns);
-
-    Ok(TableLeafCell { row_id })
-}
-
-#[derive(Debug)]
-struct TableLeafCell {
-    row_id: u64,
-}
-
-/*
-impl PageType {
-    fn from_u8(value: u8) -> anyhow::Result<Self> {
+impl From<u64> for ColType {
+    fn from(value: u64) -> Self {
         match value {
-            0x0D => Ok(PageType::TableLeaf),
-            _ => bail!("Unsupported page type"),
+            0 => ColType::Null,
+            1 => ColType::Int8,
+            2 => ColType::Int16,
+            3 => ColType::Int24,
+            4 => ColType::Int32,
+            5 => ColType::Int48,
+            6 => ColType::Int64,
+            7 => ColType::Float64,
+            8 => ColType::Zero,
+            9 => ColType::One,
+            10..=11 => ColType::Reserved,
+            12.. if value % 2 == 0 => ColType::Blob((value as u8 - 12) / 2),
+            13.. if value % 2 == 1 => ColType::Text((value as u8 - 13) / 2),
+            _ => panic!("Unsupported column type: {}", value),
         }
     }
 }
 
 #[derive(Debug)]
-pub struct TableLeafPageOld<'a> {
-    typ: PageType,
-    cell_count: u16,
-    cell_pointer_index: Vec<u16>,
-    data: &'a [u8],
-    offset: Option<usize>,
+enum ColValue {
+    Null,
+    Int8(u8),
+    Int16(u16),
+    Int24(u32),
+    Int32(u32),
+    Int48(u64),
+    Int64(u64),
+    Float64(f64),
+    Zero,
+    One,
+    Blob(Vec<u8>),
+    Text(String),
 }
-
-impl fmt::Display for TableLeafPageOld<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Page type: {:?}, cell count: {}, indexes:",
-            self.typ, self.cell_count
-        )?;
-        for idx in &self.cell_pointer_index {
-            write!(f, " {:04x}", idx)?
-        }
-        Ok(())
-    }
-}
-
-impl<'a> TableLeafPageOld<'a> {
-    pub fn new(data: &'a [u8], offset: Option<usize>) -> anyhow::Result<Self> {
-        // header: 0d xx xx 00 03 xx xx xx
-        let mut reader = ByteReader::new(data);
-
-        let typ = PageType::from_u8(reader.read_u8())?;
-        reader.skip(2);
-
-        let cell_count = reader.read_u16();
-        reader.skip(3);
-
-        let mut cell_pointer_index = Vec::new();
-        for _ in 0..cell_count {
-            let cell_pointer = reader.read_u16();
-            cell_pointer_index.push(cell_pointer);
-        }
-
-        Ok(TableLeafPageOld {
-            typ,
-            cell_count,
-            cell_pointer_index,
-            data,
-            offset,
-        })
-    }
-
-    pub fn cells(&self) -> anyhow::Result<Vec<TableLeafCellOld>> {
-        let mut cells = Vec::new();
-        for i in 0..self.cell_count {
-            let idx = self.cell_pointer_index[i as usize] - self.offset.unwrap_or(0) as u16;
-            let cell_data = &self.data[idx as usize..];
-            cells.push(TableLeafCellOld::new(cell_data)?);
-        }
-        Ok(cells)
-    }
-}
-
-#[derive(Debug)]
-pub struct TableLeafCellOld<'a> {
-    row_id: u64,
-    data: &'a [u8],
-}
-
-impl<'a> TableLeafCellOld<'a> {
-    pub fn new(data: &'a [u8]) -> anyhow::Result<Self> {
-        let mut reader = ByteReader::new(data);
-        let bytes = reader.read_varint();
-        println!("bytes: {}", bytes);
-        let row_id = reader.read_varint();
-        println!("row_id: {}", row_id);
-
-        let (header_size, size) = reader.read_varint_with_size();
-        println!("header_size: {}", header_size);
-
-        let max_size = header_size - size as u64;
-        println!("\nColumns:");
-
-        while reader.pos < max_size as usize {
-            let col_size = reader.read_varint();
-            println!("- col_size: {}", col_size);
-
-            let col_type = reader.read_varint();
-            println!("  col_type: {:x}", col_type);
-
-            match col_type {
-                0 => println!("  NULL"),
-                1 => println!("  8-bit"),
-                2 => println!("  16-bit"),
-                3 => println!("  24-bit"),
-                4 => println!("  32-bit"),
-                5 => println!("  48-bit"),
-                6 => println!("  64-bit"),
-                7 => println!("  64-bit float"),
-                8 => println!("  Zero"),
-                9 => println!("  One"),
-                10..=11 => println!("  Internal use"),
-                12.. if col_type % 2 == 0 => {
-                    let length = (col_type - 12) / 2;
-                    println!("  BLOB length: {}", length);
-                }
-                13.. if col_type % 2 == 1 => {
-                    let length = (col_type - 13) / 2;
-                    println!("  TEXT length: {}", length);
-                }
-                _ => bail!("Unsupported column type: {}", col_type),
-            }
-            println!();
-        }
-
-        println!();
-
-        Ok(TableLeafCellOld {
-            row_id,
-            data: &data[..bytes as usize],
-        })
-    }
-}
-*/
