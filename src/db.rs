@@ -112,13 +112,21 @@ pub fn read_db(file_path: &str) -> anyhow::Result<Database> {
     let mut page_data = vec![0; (header.page_size - 100) as usize];
     file.read_exact(&mut page_data)?;
 
-    hexdump(&page_data);
-    println!("page data len: {}", page_data.len());
+    let mut pages = vec![parse_page(&page_data, Some(100))?];
 
-    let page = parse_page(&page_data, Some(100))?;
+    loop {
+        let mut page_data = vec![0; header.page_size as usize];
+        match file.read_exact(&mut page_data) {
+            Ok(_) => pages.push(parse_page(&page_data, None)?),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    break;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
 
-    Ok(Database {
-        header,
-        pages: vec![page],
-    })
+    Ok(Database { header, pages })
 }
