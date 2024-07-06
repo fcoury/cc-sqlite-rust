@@ -3,7 +3,7 @@ mod page;
 mod varint;
 
 use anyhow::{bail, Result};
-use page::Page;
+use page::{parse_page, Page};
 use std::fs::File;
 use std::io::prelude::*;
 
@@ -35,12 +35,14 @@ fn main() -> Result<()> {
             let mut page_data = vec![0; (page_size - 100) as usize];
             file.read_exact(&mut page_data)?;
 
-            let page = Page::new(&page_data, Some(100))?;
-            println!("page: {}", page);
+            let page = parse_page(&page_data)?;
 
-            for cell in page.cells() {
-                println!("cell: {:?}", cell);
-            }
+            let Page::TableLeaf(page) = page else {
+                bail!("Invalid page type");
+            };
+
+            // let page = TableLeafPageOld::new(&page_data, Some(100))?;
+            println!("page: {:?}", page);
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
