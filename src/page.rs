@@ -6,16 +6,16 @@ use crate::cell::TableLeafCell;
 
 #[derive(Debug)]
 pub enum Page {
-    IndexInterior,
-    IndexLeaf,
-    TableInterior,
-    TableLeaf(TableLeafPage),
+    InteriorIndex,
+    LeafIndex,
+    InteriorTable,
+    LeafTable(TableLeafPage),
 }
 
 #[derive(Debug)]
 pub struct TableLeafPage {
-    header: LeafPageHeader,
-    cells: Vec<TableLeafCell>,
+    pub header: LeafPageHeader,
+    pub cells: Vec<TableLeafCell>,
 }
 
 impl TableLeafPage {
@@ -23,12 +23,9 @@ impl TableLeafPage {
         let mut reader = ByteReader::new(data);
         let header = LeafPageHeader::new(&mut reader);
 
-        println!("header: {:#?}", header);
-
         let mut cells = Vec::with_capacity(header.cell_count as usize);
         for _ in 0..header.cell_count {
             let cell_ptr = reader.read_u16() as usize;
-            println!("cell_pointer: {:04x}", cell_ptr);
             let ptr = (cell_ptr as u64 - offset.unwrap_or(0)) as usize;
             let cell = TableLeafCell::new(&data[ptr..])?;
             cells.push(cell);
@@ -40,10 +37,10 @@ impl TableLeafPage {
 
 #[derive(Debug)]
 pub struct LeafPageHeader {
-    freeblock_offset: u16,
-    cell_count: u16,
-    cell_content_offset: u16,
-    num_fragmented_bytes: u8,
+    pub freeblock_offset: u16,
+    pub cell_count: u16,
+    pub cell_content_offset: u16,
+    pub num_fragmented_bytes: u8,
 }
 
 impl LeafPageHeader {
@@ -70,7 +67,7 @@ pub fn parse_page(data: &[u8], offset: Option<u64>) -> anyhow::Result<Page> {
         0x02 => unimplemented!("no interior index b-tree page yet"),
         0x05 => unimplemented!("no interior table b-tree page yet"),
         0x0a => unimplemented!("no index leaf page yet"),
-        0x0d => Ok(Page::TableLeaf(TableLeafPage::new(data, offset)?)),
+        0x0d => Ok(Page::LeafTable(TableLeafPage::new(data, offset)?)),
         typ => bail!("Unsupported page type: {:x}", typ),
     }
 }

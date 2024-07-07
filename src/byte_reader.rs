@@ -1,7 +1,7 @@
 use crate::varint::VarInt;
 
 pub struct ByteReader<'a> {
-    data: &'a [u8],
+    pub data: &'a [u8],
     pub pos: usize,
 }
 
@@ -95,17 +95,23 @@ impl<'a> ByteReader<'a> {
         &self.data[start..self.pos]
     }
 
+    #[allow(unused)]
     pub fn read_varint_with_size(&mut self) -> (u64, u8) {
         let varint = VarInt::new(&self.data[self.pos..]);
-        self.pos += varint.bytes as usize;
-        let bytes = varint.bytes;
-        (u64::from(varint), bytes)
+        self.pos += varint.len as usize;
+        let size = varint.len;
+        (u64::from(varint), size)
     }
 
     pub fn read_varint(&mut self) -> u64 {
         let varint = VarInt::new(&self.data[self.pos..]);
-        self.pos += varint.bytes as usize;
+        self.pos += varint.len as usize;
         u64::from(varint)
+    }
+
+    #[allow(unused)]
+    pub fn peek_u8(&self) -> u8 {
+        self.data[self.pos]
     }
 
     pub fn skip(&mut self, bytes: usize) {

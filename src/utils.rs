@@ -1,3 +1,4 @@
+#[allow(unused)]
 pub fn hexdump(data: &[u8]) {
     for (i, chunk) in data.chunks(16).enumerate() {
         // Print the offset in the first column

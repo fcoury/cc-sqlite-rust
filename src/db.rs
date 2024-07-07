@@ -4,7 +4,6 @@ use std::io::Read;
 use crate::{
     byte_reader::ByteReader,
     page::{parse_page, Page},
-    utils::hexdump,
 };
 
 #[derive(Debug)]
@@ -13,9 +12,17 @@ pub struct Database {
     pub pages: Vec<Page>,
 }
 
+impl Database {
+    pub fn get_page(&self, idx: usize) -> Option<&Page> {
+        if idx >= self.pages.len() {
+            return None;
+        }
+        Some(&self.pages[idx])
+    }
+}
+
 #[derive(Debug)]
 pub struct DbHeader {
-    magic: [u8; 16],
     page_size: u16,
     file_format_write_version: u8,
     file_format_read_version: u8,
@@ -69,10 +76,7 @@ impl DbHeader {
         let version_valid_for = reader.read_u32();
         let sqlite_version = reader.read_u32();
 
-        let magic: [u8; 16] = magic.try_into()?;
-
         Ok(Self {
-            magic,
             page_size,
             file_format_write_version,
             file_format_read_version,
@@ -107,8 +111,6 @@ pub fn read_db(file_path: &str) -> anyhow::Result<Database> {
     let mut reader = ByteReader::new(&header);
     let header = DbHeader::new(&mut reader)?;
 
-    println!("{:#?}", header);
-
     let mut page_data = vec![0; (header.page_size - 100) as usize];
     file.read_exact(&mut page_data)?;
 
@@ -129,4 +131,91 @@ pub fn read_db(file_path: &str) -> anyhow::Result<Database> {
     }
 
     Ok(Database { header, pages })
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    use crate::cell::{ColType, ColValue};
+
+    use super::*;
+
+    #[test]
+    fn empty_db() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("empty.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+
+        conn.execute(
+            "CREATE TABLE test (id INTEGER PRIMARY KEY, foo TEXT NOT NULL)",
+            (),
+        )
+        .unwrap();
+        conn.close().unwrap();
+
+        let db = read_db(&path.to_string_lossy()).unwrap();
+        let Page::LeafTable(page) = db.get_page(0).unwrap() else {
+            panic!("Expected TableLeaf, got {:?}", db.get_page(0));
+        };
+
+        assert_eq!(page.header.cell_count, 1);
+        assert_eq!(page.cells.len(), 1);
+
+        let cell = page.cells.first().unwrap();
+        assert_eq!(
+            cell.column_types,
+            vec![
+                ColType::Text(5),
+                ColType::Text(4),
+                ColType::Text(4),
+                ColType::Int8,
+                ColType::Text(61)
+            ]
+        );
+        assert_eq!(
+            cell.column_values,
+            vec![
+                Some(ColValue::Text("table".to_string())),
+                Some(ColValue::Text("test".to_string())),
+                Some(ColValue::Text("test".to_string())),
+                Some(ColValue::Int8(2)),
+                Some(ColValue::Text(
+                    "CREATE TABLE test (id INTEGER PRIMARY KEY, foo TEXT NOT NULL)".to_string()
+                )),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_table_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("empty.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "CREATE TABLE test (id INTEGER PRIMARY KEY, foo TEXT NOT NULL)",
+            (),
+        )
+        .unwrap();
+        conn.execute("INSERT INTO test VALUES (42, 'tjena tjena')", ())
+            .unwrap();
+        conn.close().unwrap();
+
+        let db = read_db(&path.to_string_lossy()).unwrap();
+        let Page::LeafTable(page) = db.get_page(1).unwrap() else {
+            panic!("Expected TableLeaf, got {:?}", db.get_page(1));
+        };
+
+        assert_eq!(page.header.cell_count, 1);
+        assert_eq!(page.cells.len(), 1);
+
+        let cell = page.cells.first().unwrap();
+        assert_eq!(cell.rowid, 42);
+        assert_eq!(cell.column_types, vec![ColType::Null, ColType::Text(11)]);
+        assert_eq!(
+            cell.column_values,
+            vec![None, Some(ColValue::Text("tjena tjena".to_string()))]
+        );
+    }
 }

@@ -3,13 +3,13 @@ use std::fmt;
 #[derive(Debug)]
 pub struct VarInt {
     value: [u8; 10],
-    pub bytes: u8,
+    pub len: u8,
 }
 
 impl fmt::Display for VarInt {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for i in 0..self.bytes {
-            write!(f, "{:02x} ", self.value[9 - (i as usize)])?;
+        for i in 0..self.len {
+            write!(f, "{:02x} ", self.value[i as usize])?;
         }
         Ok(())
     }
@@ -22,7 +22,7 @@ impl VarInt {
 
         loop {
             let d = data[bytes as usize];
-            value[9 - (bytes as usize)] = d;
+            value[bytes as usize] = d;
             bytes += 1;
             if (d & 0x80) == 0 {
                 break;
@@ -30,48 +30,48 @@ impl VarInt {
         }
         assert!(bytes <= 9);
 
-        VarInt { bytes, value }
-    }
-}
-
-impl From<u64> for VarInt {
-    fn from(from_value: u64) -> Self {
-        let mut from_value = from_value;
-
-        // checks if the value has bits after the upper 32 bits
-        if from_value & 0xFF_00_00_00 == 0 {}
-
-        let mut bytes: u8 = 0;
-        let mut value = [0; 10];
-        loop {
-            value[bytes as usize] = ((from_value & 0x7F) | 0x80) as u8;
-            from_value >>= 7;
-            bytes += 1;
-            if from_value == 0 {
-                break;
-            }
-        }
-        assert!(bytes <= 9);
-
-        // Clears the continuation bit on the first byte
-        value[0] &= 0x7F;
-        value.reverse();
-
-        VarInt { value, bytes }
+        VarInt { len: bytes, value }
     }
 }
 
 impl From<VarInt> for u64 {
-    fn from(from_value: VarInt) -> Self {
-        let mut result = 0;
-        let mut shift = 0;
+    fn from(varint: VarInt) -> u64 {
+        let mut ux: u64 = 0;
 
-        for i in 0..from_value.bytes {
-            result |= ((from_value.value[9 - (i as usize)] & 0x7F) as u64) << shift;
-            shift += 7;
+        for byte in varint.value.iter() {
+            ux = (ux << 7) + (byte & 0x7F) as u64;
+            if byte & 0x80 == 0 {
+                return ux;
+            }
         }
 
-        result
+        return ux;
+    }
+}
+
+impl From<u64> for VarInt {
+    fn from(mut v: u64) -> Self {
+        let mut value = [0u8; 10];
+        let mut n = 0;
+
+        loop {
+            value[n] = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                value[n] |= 0x80;
+            }
+            n += 1;
+            if v == 0 || n == 10 {
+                break;
+            }
+        }
+
+        println!("Encoded value: {:?}", &value[..n]); // Debug print
+
+        VarInt {
+            value,
+            len: n as u8,
+        }
     }
 }
 
@@ -83,8 +83,21 @@ fn test_varint_single() {
 }
 
 #[test]
+fn test_varint_from_parts() {
+    let varint = VarInt::new(&[0x81, 0x07]);
+    let value: u64 = varint.into();
+    assert_eq!(value, 135);
+}
+
+#[test]
 fn test_varint_64bit() {
     let varint = VarInt::from(0x7F_FF_FF_FF_FF_FF_FF_FF);
     let value: u64 = varint.into();
     assert_eq!(value, 0x7F_FF_FF_FF_FF_FF_FF_FF);
+}
+
+#[test]
+fn test_varint_zero() {
+    let varint = VarInt::from(0);
+    assert_eq!(varint.len, 1);
 }

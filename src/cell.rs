@@ -1,11 +1,12 @@
 use crate::byte_reader::ByteReader;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub struct TableLeafCell {
-    rowid: u64,
-    payload_size: u64,
-    column_types: Vec<ColType>,
-    column_values: Vec<Option<ColValue>>,
+    pub rowid: u64,
+    pub payload_size: u64,
+    pub column_types: Vec<ColType>,
+    pub column_values: Vec<Option<ColValue>>,
 }
 
 impl TableLeafCell {
@@ -17,14 +18,12 @@ impl TableLeafCell {
         let header_size = reader.read_varint();
 
         let mut column_types = Vec::new();
-        while reader.pos < header_size as usize - 1 {
-            let col_type = ColType::from(reader.read_varint());
+        while reader.pos <= header_size as usize + 1 {
+            let col_type = reader.read_varint();
+            let col_type = ColType::from(col_type);
             column_types.push(col_type);
         }
 
-        let mut reader = ByteReader::new(&data[header_size as usize..]);
-        let page_number = reader.read_varint();
-        println!("page_number: {:04x}", page_number);
         let mut column_values = Vec::with_capacity(column_types.len());
         for col_type in &column_types {
             let col_value = match col_type {
@@ -63,8 +62,8 @@ impl TableLeafCell {
     }
 }
 
-#[derive(Debug)]
-enum ColType {
+#[derive(Debug, PartialEq, Eq)]
+pub enum ColType {
     Null,
     Int8,
     Int16,
@@ -76,8 +75,8 @@ enum ColType {
     Zero,
     One,
     Reserved,
-    Blob(u8),
-    Text(u8),
+    Blob(u64),
+    Text(u64),
 }
 
 impl From<u64> for ColType {
@@ -94,15 +93,16 @@ impl From<u64> for ColType {
             8 => ColType::Zero,
             9 => ColType::One,
             10..=11 => ColType::Reserved,
-            12.. if value % 2 == 0 => ColType::Blob((value as u8 - 12) / 2),
-            13.. if value % 2 == 1 => ColType::Text((value as u8 - 13) / 2),
+            12.. if value % 2 == 0 => ColType::Blob((value - 12) / 2),
+            13.. if value % 2 == 1 => ColType::Text((value - 13) / 2),
             _ => panic!("Unsupported column type: {}", value),
         }
     }
 }
 
-#[derive(Debug)]
-enum ColValue {
+#[allow(unused)]
+#[derive(Debug, PartialEq)]
+pub enum ColValue {
     Null,
     Int8(u8),
     Int16(u16),
